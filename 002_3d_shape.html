@@ -1,0 +1,270 @@
+<!DOCTYPE html><script type="module">
+import App, { Vec3 } from "./fungi/App.js";
+
+import Ray			from "./fungi.ray/Ray.js";
+import DragPoints	from "./fungi.misc/DragPoints.js";
+import PropPanel	from "./sage.ui/PropPanel.js";
+
+
+//#####################################################
+App
+	.init( true )
+	.load_shaders( "LowPoly.js" )
+	.use_events()
+	.use_debug()
+	.set_camera( 0, 45, 4, 0, 0.0, 0 )
+	.task( init )
+	.then();
+
+//#####################################################
+
+let FLAT	= null;
+let ENTITY	= null;
+let VERTS	= null;
+let EXTRUDE = 0.5;
+
+async function init(){
+	let flat	= star_2d_shape();
+	let geo		= extrude_shape_geo( flat );
+	let e 		= create_mesh_entity( geo );
+
+	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	//load_custom_shader( img );								// Compile Shader
+	//ENTITY = create_mesh_entity();							// Create Special Quad Mesh
+	//ENTITY.mat.set( "line_pos", POS );						// Use Global pointer to ez uniform update.
+
+	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	/**/
+
+	DragPoints.init()
+		.set_select_color( "cyan")
+		.set_move_handler( on_pnt_drag );
+
+	let v = new Vec3();
+	for( let i=0; i < flat.length; i+=3 ){
+		v.from_buf( flat, i );
+		v.y += 0.3;
+		DragPoints.pnt( v, null, "green", 1, 0.1 );		// Line Start
+	}
+
+	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	init_ui();
+
+	FLAT 		= flat;
+	VERTS		= geo.vert;
+	ENTITY		= e;
+	return true;
+}
+
+// Update POS Uniform buffer when points are dragged around
+function on_pnt_drag( idx, pos ){
+	idx				*= 3;
+	FLAT[ idx ]		= pos[ 0 ];
+	FLAT[ idx+1 ]	= pos[ 1 ] - 0.3;
+	FLAT[ idx+2 ]	= pos[ 2 ];
+
+	extrude_shape( FLAT, VERTS );
+	App.buffer.update_data( ENTITY.vert_buf, VERTS );
+}
+
+function star_2d_shape(){
+	let rot_steps	= 4;
+	let radius_in	= 0.5;
+	let radius_out	= 1;
+
+	let x			= 0;
+	let z			= 0;
+	let inc			= Math.PI / rot_steps;
+	let rot 		= Math.PI / 2 * 3;
+
+	let ary = new Array( rot_steps * 2 * 3 );	// PreAlocate Space for all Verts
+	let ii 	= 0;
+
+	for( let i=0; i < rot_steps; i++ ){
+		// Outer Point
+		ary[ ii++ ] = Math.cos( rot ) * radius_out;
+		ary[ ii++ ] = 0;
+		ary[ ii++ ] = Math.sin( rot ) * radius_out;
+		rot += inc;
+
+		// Inner Point
+		ary[ ii++ ] = Math.cos( rot ) * radius_in;
+		ary[ ii++ ] = 0;
+		ary[ ii++ ] = Math.sin( rot ) * radius_in;
+		rot += inc;
+	}
+
+	return ary;
+}
+
+function shape_centroid( ary ){
+	let v = new Vec3();
+	let c = new Vec3();
+	let n = 0;
+
+	for( let i=0; i < ary.length; i+=3 ){
+		v.from_buf( ary, i );
+		c.add( v );
+		n++;
+	}
+
+	c.scale( 1/n );	
+	return c;
+}
+
+function extrude_shape_geo( flat ){
+	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	// EXTRUDE SHAPE
+	// Allocate space for 3D Shape. Its the flat shape times 2, PLUS 2 centroid points.
+	
+	let verts = new Float32Array( flat.length * 2 + 6 );
+	extrude_shape( flat, verts );
+
+	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	let idx = new Array();
+	let vert_cnt = flat.length / 3;
+	
+	grid_indices( vert_cnt, 2, 0, true, true, idx );
+	fan_indices( vert_cnt * 2, 0, vert_cnt, false, idx );
+	fan_indices( vert_cnt * 2 + 1, vert_cnt, vert_cnt, true, idx );
+	
+	return { vert:verts, idx:new Uint16Array( idx ) };
+}
+
+function extrude_shape( flat, verts ){
+	let to			= [ 0, EXTRUDE, 0 ];
+	let flat_len	= flat.length;
+	let i			= 0;
+
+	for( i=0; i < flat_len; i+=3 ){
+		// Bottom
+		verts[ i ]		= flat[ i ];		
+		verts[ i+1 ]	= flat[ i+1 ];
+		verts[ i+2 ]	= flat[ i+2 ];
+
+		// Top
+		verts[ flat_len + i ]	= flat[ i ]		+ to[ 0 ];		
+		verts[ flat_len + i+1 ]	= flat[ i+1 ]	+ to[ 1 ];
+		verts[ flat_len + i+2 ]	= flat[ i+2 ]	+ to[ 2 ];
+	}
+
+	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	// ADD BOTTOM AND TOP CENTROID POINTS
+	let cent = shape_centroid( flat );
+	i = flat_len * 2;
+	verts[ i++ ] = cent[ 0 ];
+	verts[ i++ ] = cent[ 1 ];
+	verts[ i++ ] = cent[ 2 ];
+	verts[ i++ ] = cent[ 0 ] + to[ 0 ];
+	verts[ i++ ] = cent[ 1 ] + to[ 1 ];
+	verts[ i++ ] = cent[ 2 ] + to[ 2 ];
+}
+
+
+// Create Indices based on a Grid
+function grid_indices( row_size, row_cnt, start_idx=0, do_loop=false, rev_quad=false, out=null ){
+	out = out || new Array();
+
+	let row_stop = row_cnt-1, //( do_loop )? row_cnt : row_cnt - 1,
+		col_stop = ( do_loop )? row_size : row_size - 1,
+		row_a, row_b, 
+		r, rr, rrr, 
+		a, b, c, d;
+
+	for( r=0; r < row_stop; r++ ){
+		// Figure out the starting Index for the Two Rows
+		row_a = start_idx + row_size * r;
+		row_b = start_idx + row_size * (r+1);
+
+		for( rr=0; rr < col_stop; rr++ ){
+			// Defined the Vertex Index of a Quad
+			rrr	= (rr+1) % row_size;
+			a 	= row_a + rr;		
+			b 	= row_a + rrr;
+			d 	= row_b + rr;
+			c 	= row_b + rrr;
+
+			if( !rev_quad ) out.push( a,b,c, c,d,a ); // Counter ClockWise
+			else 			out.push( a,d,c, c,b,a ); // ClockWise
+		}
+	}
+
+	return out;
+}
+
+function fan_indices( c_idx, start, size, rev_quad=false, out=null ){
+	out = out || new Array();
+
+	let i, ii, a, b;
+	for( i=0; i < size; i++ ){
+		ii = ( i + 1 ) % size;	// Next Point on the edge
+
+		a = start + i;
+		b = start + ii;
+
+		if( !rev_quad )	out.push( c_idx, a,	b ); // Counter ClockWise
+		else			out.push( c_idx, b, a ); // ClockWise
+	}
+	
+	return out;
+}
+
+function create_mesh_entity( geo ){
+	// Push to GPU Buffer ( For optmization, can interleave data to use only 1 buffer )
+	let idx_b	= App.buffer.new_element( geo.idx, true );
+	let vert_b	= App.buffer.new_array( geo.vert, 3, false );
+	
+	// Pass buffers and Attib Loc to define Mesh ( VAO )
+	let mesh	= App.mesh.from_buffer_config([
+		{ name: "indices", buffer: idx_b },
+		{ name: "vertices", buffer: vert_b, attrib_loc:App.shader.POS_LOC, size:3 },
+	], "Quadx", geo.idx.length );
+
+	// Create Shader Material and Rendering Entity
+	let mat = App.shader.new_material( "LowPoly" )
+		.set_cullface( false )
+		.set_blend( true )
+		.set_alpha_coverage( true )
+		.set( "color", "#ff7f7faa");
+
+	let e	= App.mesh_entity( "Quad", mesh, mat, App.mesh.TRI );
+
+	e.node.set_pos( 0, 0.3, 0 );
+
+	e.mat		= mat;
+	e.vert_buf	= vert_b;
+	return e;
+}
+
+// #endregion /////////////////////////////////////////////////////////////////////////
+
+function init_ui(){
+	document.getElementById( "quad_h" ).addEventListener( "input", (e)=>{
+		EXTRUDE = parseFloat( e.srcElement.value );
+
+		extrude_shape( FLAT, VERTS );
+		App.buffer.update_data( ENTITY.vert_buf, VERTS );
+
+		App.render();
+	});
+}
+
+//#####################################################
+</script>
+<html><head><style>
+	html,body{ margin:0px; padding:0px; width:100%; height:100%; }
+	.info{ position:fixed; top:2px; left:5px; font-family:monospace; color:white; font-size:16px; }
+</style>
+</head><body>
+	<canvas id="pg_canvas"></canvas>
+
+	<prop-panel id="PntProp" side="right" width="300px" class="Theme" open="true" top="10px">
+		<prop-range label="Height" id="quad_h" value="0.5" min="0.1" max="2" step="0.1"></prop-range>
+	</prop-panel>
+
+	<div class="info">
+		<b>DIRECTIONS</b><br>
+		- Use <i>RIGHT CLICK</i> to select points and to use the transform gizmo.<br>
+		- Use <i>LEFT CLICK</i> to move the camera.<br>
+	</div>
+</body></html>
