@@ -53,4 +53,4 @@ In the end I tried to get this to be transparent, but I couldn't get it working 
 ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
 
 # Fungi
-In this task I used my personal 3D rendering engine that I have built from scratch using WebGL 2.0 and Javascript ES6+. In the course of the task I had to do some engine improvements, like being able to create new entities at runtime. Up till now, all entities were created on init and any new entities created after the fact would not end up being rendering. Also added several new functions to the math lib, mainly Vec2 and Vec3. Plus I created a simple shader to render a quad mesh with a border around it for the purpose of rendering a quadtree in 3d. Also included some new visual debugging features.
+In this task I used my personal 3D rendering engine that I have built from scratch using WebGL 2.0 and Javascript ES6+.
